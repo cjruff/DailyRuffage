@@ -32,6 +32,11 @@ a { color: var(--accent); }
   background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 20px; opacity: 0;
   transition: opacity .2s; pointer-events: none; z-index: 30; max-width: 90vw; text-align: center; }
 #toast.show { opacity: .95; }
+#toast.act { pointer-events: auto; display: flex; align-items: center; gap: 14px; }
+#toast button { background: none; border: 0; color: var(--accent); font-weight: 700; padding: 0; cursor: pointer; }
+.trash { list-style: none; padding: 0; margin: 10px 0 0; }
+.trash li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px dashed var(--line); }
+.trash small { display: block; color: var(--muted); font-size: .75rem; }
 
 /* list */
 .search { position: sticky; top: calc(52px + var(--safe-top)); z-index: 5; background: var(--bg); padding-bottom: 8px; }
@@ -58,7 +63,7 @@ mark { background: #ffe08a; color: inherit; border-radius: 2px; }
   object-fit: cover; margin: 4px auto 22px; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
 .pills { width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 14px; }
 .pill { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 62px; padding: 0 22px;
-  border-radius: 31px; background: var(--accent); color: #fff; font-size: 1.25rem; font-weight: 600; text-decoration: none;
+  border-radius: 31px; background: #a9d8f2; color: #0e3a55; font-size: 1.25rem; font-weight: 600; text-decoration: none;
   box-shadow: 0 3px 10px rgba(0,0,0,.18); -webkit-tap-highlight-color: transparent; }
 .pill:active { transform: scale(.98); filter: brightness(.95); }
 .pill .ico { font-size: 1.4rem; }
@@ -74,6 +79,7 @@ mark { background: #ffe08a; color: inherit; border-radius: 2px; }
 .tile:active { background: var(--accent-soft); }
 .tile .ico { font-size: 2.3rem; flex: none; }
 .tile small { display: block; color: var(--muted); font-size: .85rem; font-weight: 400; margin-top: 3px; }
+.tile small.tag { font-style: italic; color: var(--accent); margin-top: 2px; }
 .add-page h2 { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; font-size: 1.35rem; }
 .add-page h2 .ico { font-size: 1.8rem; }
 .hint.big { font-size: .98rem; line-height: 1.4; margin-bottom: 12px; }
@@ -96,6 +102,8 @@ mark { background: #ffe08a; color: inherit; border-radius: 2px; }
   padding: 11px 14px; will-change: transform; }
 .sw-del { position: absolute; top: 0; right: 0; bottom: 0; width: 120px; padding-left: 28px; border: 0;
   border-radius: var(--radius); background: #c0392b; color: #fff; font-weight: 600; cursor: pointer; }
+.sw-fav { position: absolute; top: 0; left: 0; bottom: 0; width: 160px; display: flex; align-items: center; padding-left: 16px;
+  border-radius: var(--radius); background: #d9a21b; color: #fff; font-weight: 600; }
 
 /* recipe */
 .recipe h2 { font-size: 1.5rem; margin: 6px 0 4px; }

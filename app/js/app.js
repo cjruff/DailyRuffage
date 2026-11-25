@@ -62,9 +62,23 @@ async function doSync(quiet) {
 }
 
 function go(hash) { location.hash = hash; }
-function toast(msg, ms = 2600) {
-  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
-  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), ms);
+function toast(msg, ms = 2600, action) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show'); t.classList.toggle('act', !!action);
+  if (action) {
+    const b = document.createElement('button'); b.textContent = action.label;
+    b.onclick = () => { t.classList.remove('show', 'act'); clearTimeout(toast._t); action.fn(); };
+    t.append(b);
+  }
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show', 'act'), action ? 6000 : ms);
+}
+// Deleting only flags a recipe; Undo (and Settings → Recently deleted) bring it back.
+async function deleteRecipe(r, after) {
+  r.deleted = true; await saveRecipe(r); after?.();
+  toast('Deleted', 0, { label: 'Undo', fn: async () => { await restoreRecipe(r.id); after?.(); } });
+}
+async function restoreRecipe(id) {
+  const r = await db.get(id); if (!r) return;
+  r.deleted = false; await saveRecipe(r); toast('Restored “' + (r.title || 'Untitled') + '”');
 }
 function setTop(title, back) {
   $('#page-title').textContent = title;
@@ -175,12 +189,16 @@ function renderList() {
     $('#count').textContent = `${rs.length} recipe${rs.length === 1 ? '' : 's'}`;
     sw.reset();
     $('#rlist').innerHTML = rs.length ? rs.map(r => `
-      <li class="swipe" data-id="${r.id}"><button class="sw-del" tabindex="-1">Delete</button><div class="sw-body">
+      <li class="swipe" data-id="${r.id}"><div class="sw-fav">${r.favorite ? '☆ Unfavorite' : '★ Favorite'}</div><button class="sw-del" tabindex="-1">Delete</button><div class="sw-body">
       <div class="t">${hl(r.title || 'Untitled')}${r.favorite ? ' <span title="Favorite">★</span>' : ''}${r.needsReview ? '<span class="badge review">review</span>' : ''}</div>
       <div class="m">${[r.ingredients.filter(i => i.item).length + ' ingredients', ...(r.tags || []), r.origin].filter(Boolean).map(h).join(' · ')}</div></div></li>`).join('')
       : `<div class="empty">Nothing matches. ${listState.q ? 'Try fewer words.' : ''}</div>`;
   };
-  const sw = enableSwipe($('#rlist'));
+  const sw = enableSwipe($('#rlist'), async li => {
+    const r = recipes.find(x => x.id === li.dataset.id); if (!r) return;
+    r.favorite = !r.favorite; await saveRecipe(r); draw();
+    toast(r.favorite ? '★ Added to favorites' : 'Removed from favorites');
+  });
   draw();
   $('#q').oninput = e => { listState.q = e.target.value; draw(); };
   view.querySelectorAll('.chip').forEach(c => c.onclick = () => { listState.filter = c.dataset.f; renderList(); });
@@ -189,8 +207,8 @@ function renderList() {
     const li = e.target.closest('li[data-id]'); if (!li) return;
     if (e.target.closest('.sw-del')) {
       const r = recipes.find(x => x.id === li.dataset.id); if (!r) return;
-      if (!confirm(`Delete “${r.title || 'Untitled'}”? It will be removed from the cookbook on every device.`)) { sw.close(); return; }
-      r.deleted = true; await saveRecipe(r); draw(); toast('Deleted'); return;
+      if (!confirm(`Delete “${r.title || 'Untitled'}”? (You can undo, or restore it later from Settings.)`)) { sw.close(); return; }
+      await deleteRecipe(r, draw); return;
     }
     if (sw.isOpen(li)) { sw.close(); return; }
     listState.scroll = window.scrollY; go('#/r/' + li.dataset.id);
@@ -198,8 +216,8 @@ function renderList() {
   if (listState.scroll) { window.scrollTo(0, listState.scroll); listState.scroll = 0; }
 }
 
-// Swipe a row left to reveal its Delete button (touch screens).
-function enableSwipe(list) {
+// Swipe a row left to reveal its Delete button; swipe right to (un)favorite it (touch screens).
+function enableSwipe(list, onFav) {
   const W = 92; let start = null, open = null, swiped = 0;
   const setX = (li, x, anim) => {
     const b = li.querySelector('.sw-body'); if (!b) return;
@@ -216,12 +234,13 @@ function enableSwipe(list) {
     if (!start.dir) { if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return; start.dir = Math.abs(dx) > Math.abs(dy) ? 'h' : 'v'; }
     if (start.dir !== 'h') return;
     e.preventDefault();
-    setX(start.li, Math.max(-W * 1.4, Math.min(0, start.base + dx)), false);
+    setX(start.li, Math.max(-W * 1.4, Math.min(W * 1.4, start.base + dx)), false);
   }, { passive: false });
   list.addEventListener('touchend', e => {
     if (start?.dir === 'h') {
-      const dx = e.changedTouches[0].clientX - start.x, isOpen = start.base + dx < -W / 2;
+      const dx = e.changedTouches[0].clientX - start.x, x = start.base + dx, isOpen = x < -W / 2;
       setX(start.li, isOpen ? -W : 0, true); open = isOpen ? start.li : null; swiped = Date.now();
+      if (start.base === 0 && x > W * 0.8 && onFav) onFav(start.li);
     }
     start = null;
   });
@@ -479,15 +498,15 @@ function renderEdit(id, draft) {
   };
   $('#cancel').onclick = () => history.back();
   if ($('#del')) $('#del').onclick = async () => {
-    if (!confirm(`Delete “${r.title}”?`)) return;
-    r.deleted = true; await saveRecipe(r); toast('Deleted'); location.replace('#/recipes');
+    if (!confirm(`Delete “${r.title}”? (You can undo, or restore it later from Settings.)`)) return;
+    location.replace('#/recipes'); await deleteRecipe(r, () => { if (location.hash === '#/recipes') renderList(); });
   };
 }
 
 /* ---------- add / import ---------- */
 const ADD_KINDS = {
   photos: { ico: '📸', title: 'From photos & screenshots', sub: 'Pick all the screenshots for one recipe' },
-  link:   { ico: '🔗', title: 'From a link', sub: 'TikTok, a recipe website…' },
+  link:   { ico: '🔗', title: 'From a link', sub: 'TikTok, a recipe website…', tag: 'All the recipes, zero narcissism' },
   text:   { ico: '🎙️', title: 'Type, paste or dictate', sub: 'A caption, a note, or talk it through' },
 };
 function renderAdd(kind) {
@@ -496,7 +515,7 @@ function renderAdd(kind) {
   if (!ADD_KINDS[kind]) {
     setTop('Add a Recipe', true); showFab(false);
     view.innerHTML = needServer + Object.entries(ADD_KINDS).map(([k, t]) =>
-      `<a class="tile" href="#/add/${k}"><span class="ico">${t.ico}</span><span><b>${t.title}</b><small>${t.sub}</small></span></a>`).join('');
+      `<a class="tile" href="#/add/${k}"><span class="ico">${t.ico}</span><span><b>${t.title}</b><small>${t.sub}</small>${t.tag ? `<small class="tag">${t.tag}</small>` : ''}</span></a>`).join('');
     return;
   }
   const t = ADD_KINDS[kind];
@@ -577,7 +596,17 @@ async function renderSettings() {
     <div class="actions"><button class="btn" id="export">Download backup</button>
       <label class="btn">Restore from file<input type="file" id="restore" accept="application/json,.json" hidden></label></div>
   </div>
+  <div class="panel" id="trash"></div>
   <footer class="about"><img class="brand-big" src="icons/brand-art.jpg" alt="Chef Nala">Daily Ruffage · ${recipes.length} recipes<br>Code: © Corey J Ruff</footer>`;
+  const drawTrash = async () => {
+    const gone = (await db.all()).filter(r => r.deleted).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    $('#trash').innerHTML = `<h3>Recently deleted</h3>
+      <div class="hint">Deleted recipes stay here, on every device, until you restore them.</div>
+      ${gone.length ? `<ul class="trash">${gone.map(r => `<li><span>${h(r.title || 'Untitled')}<small>${new Date(r.updatedAt).toLocaleDateString()}</small></span>
+        <button class="btn small" data-id="${r.id}">Restore</button></li>`).join('')}</ul>` : '<div class="hint" style="margin-top:8px">Nothing deleted.</div>'}`;
+    $('#trash').querySelectorAll('button[data-id]').forEach(b => b.onclick = async () => { await restoreRecipe(b.dataset.id); drawTrash(); });
+  };
+  drawTrash();
   $('#name').onchange = e => saveSettings({ name: e.target.value.trim() });
   $('#save').onclick = () => {
     saveSettings({ name: $('#name').value.trim(), serverUrl: $('#url').value.trim(), passcode: $('#pass').value });
