@@ -69,6 +69,7 @@ function toast(msg, ms = 2600) {
 function setTop(title, back) {
   $('#page-title').textContent = title;
   $('#back').hidden = !back;
+  $('#brand').hidden = !!back;
 }
 function showFab(on) { $('#fab-wrap').hidden = !on; }
 
@@ -363,7 +364,7 @@ async function renderSettings() {
   </div>
   <div class="panel form">
     <h3>Server (sync + photo import)</h3>
-    <label>Worker URL</label><input type="url" id="url" value="${h(s.serverUrl || '')}" placeholder="https://daily-ruffage.yourname.workers.dev">
+    <label>Worker URL</label><input type="url" id="url" value="${h(s.serverUrl || '')}" placeholder="e.g. https://daily-ruffage.example.workers.dev">
     <label>Passcode</label><input type="password" id="pass" value="${h(s.passcode || '')}">
     <div class="hint">${last ? 'Last synced ' + new Date(last).toLocaleString() : 'Not synced yet'}${pending ? ` · ${pending} change(s) waiting` : ''}</div>
     <div class="actions"><button class="btn primary" id="save">Save</button><button class="btn" id="syncNow" ${hasServer() ? '' : 'disabled'}>Sync now</button></div>
@@ -374,7 +375,7 @@ async function renderSettings() {
     <div class="actions"><button class="btn" id="export">Download backup</button>
       <label class="btn">Restore from file<input type="file" id="restore" accept="application/json,.json" hidden></label></div>
   </div>
-  <footer class="about">Daily Ruffage · ${recipes.length} recipes<br>Code: © Corey J Ruff</footer>`;
+  <footer class="about"><img class="brand-big" src="icons/brand-art.jpg" alt="Chef Nala">Daily Ruffage · ${recipes.length} recipes<br>Code: © Corey J Ruff</footer>`;
   $('#name').onchange = e => saveSettings({ name: e.target.value.trim() });
   $('#save').onclick = () => {
     saveSettings({ name: $('#name').value.trim(), serverUrl: $('#url').value.trim(), passcode: $('#pass').value });
