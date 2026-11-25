@@ -13,7 +13,7 @@ database_id = "9c5a645f-7e82-4e3b-887f-74ce373b3db9"
 # "gemini" (free tier) or "anthropic" (paid, fractions of a cent per recipe)
 AI_PROVIDER = "gemini"
 # Leave blank for the default model of the chosen provider
-AI_MODEL = "gemini-3.8-flash"
+AI_MODEL = "gemini-2.5-flash"
 # Your GitHub Pages origin, e.g. "https://cjruff.github.io" ("*" works but is looser)
 ALLOWED_ORIGIN = "https://cjruff.github.io"
 
