@@ -1,8 +1,9 @@
 // Offline support: app shell is cached; pages load instantly and work with no signal.
 // Code: © Corey J Ruff
-const VERSION = 'daily-ruffage-v5';
+const VERSION = 'daily-ruffage-v6';
 const SHELL = ['./', 'index.html', 'styles.css', 'manifest.webmanifest', 'js/app.js', 'js/db.js', 'js/sync.js',
-  'js/text.js', 'data/seed-recipes.json', 'icons/favicon.png', 'icons/brand-art.jpg', 'icons/icon-180.png', 'icons/icon-192.png'];
+  'js/text.js', 'data/seed-recipes.json', 'icons/favicon.png', 'icons/brand-art.jpg', 'icons/icon-180.png', 'icons/icon-192.png',
+  'img/grilling-steak.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

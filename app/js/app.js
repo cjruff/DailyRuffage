@@ -53,7 +53,7 @@ async function doSync(quiet) {
   try {
     const r = await sync();
     await reload();
-    if (r.pulled && /^#\/?$/.test(location.hash || '#/')) renderList();
+    if (r.pulled) { const hsh = location.hash || '#/'; if (/^#\/?$/.test(hsh)) renderHome(); else if (hsh === '#/recipes') renderList(); }
     if (!quiet) toast(`Synced — ${r.pushed} sent, ${r.pulled} received`);
   } catch (e) {
     $('#sync-dot').className = 'err';
@@ -69,7 +69,7 @@ function toast(msg, ms = 2600) {
 function setTop(title, back) {
   $('#page-title').textContent = title;
   $('#back').hidden = !back;
-  $('#brand').hidden = !!back;
+  $('#brand').hidden = true;     // the home screen shows the big artwork instead
 }
 function showFab(on) { $('#fab-wrap').hidden = !on; }
 
@@ -89,14 +89,47 @@ function route() {
   const m = hash.match(/^#\/(\w+)?\/?([^/]+)?\/?(\w+)?/) || [];
   const [, page, id, sub] = m;
   window.scrollTo(0, 0);
-  if (!page) return renderList();
+  if (!page) return renderHome();
+  if (page === 'recipes') return renderList();
+  if (page === 'ideas') return renderIdeas();
+  if (page === 'steak') return renderSteak();
   if (page === 'r' && sub === 'edit') return renderEdit(id);
   if (page === 'r' && sub === 'cook') return renderRecipe(id, true);
   if (page === 'r') return renderRecipe(id, false);
   if (page === 'new') return renderEdit(null);
-  if (page === 'add') return renderAdd();
+  if (page === 'add') return renderAdd(id);
   if (page === 'settings') return renderSettings();
-  renderList();
+  renderHome();
+}
+
+/* ---------- home ---------- */
+function renderHome() {
+  setTop('Daily Ruffage', false); showFab(false);
+  const review = recipes.filter(r => r.needsReview).length;
+  view.innerHTML = `
+  <div class="home">
+    <img class="home-art" src="icons/brand-art.jpg" alt="Chef Nala">
+    <nav class="pills">
+      <a class="pill" href="#/recipes"><span class="ico">🔍</span>Search Recipes</a>
+      <a class="pill" href="#/ideas"><span class="ico">💡</span>Search Ideas</a>
+      <a class="pill" href="#/add"><span class="ico">➕</span>Add a Recipe</a>
+      <a class="pill" href="#/steak"><span class="ico">🔥</span>Grilling Steak</a>
+    </nav>
+    <div class="home-count">${recipes.length} recipes${review ? ` · <a href="#/recipes" id="toReview">${review} need${review === 1 ? 's' : ''} review</a>` : ''}</div>
+  </div>`;
+  if ($('#toReview')) $('#toReview').onclick = () => { listState.filter = 'review'; };
+}
+
+/* ---------- grilling chart ---------- */
+function renderSteak() {
+  setTop('Grilling Steak', true); showFab(false);
+  view.innerHTML = `<img class="chart" id="chart" src="img/grilling-steak.png" alt="Steak grilling times by thickness and doneness">
+    <div class="hint" style="text-align:center">Tap the chart to enlarge.</div>`;
+  $('#chart').onclick = () => lightbox($('#chart').src);
+}
+function lightbox(src) {
+  const lb = document.createElement('div'); lb.className = 'lightbox'; lb.innerHTML = `<img src="${src}">`;
+  lb.onclick = () => lb.remove(); document.body.append(lb);
 }
 
 /* ---------- list ---------- */
@@ -124,7 +157,7 @@ function hl(text) {
 }
 
 function renderList() {
-  setTop('Daily Ruffage', false); showFab(true);
+  setTop('Search Recipes', true); showFab(true);
   const tags = [...new Set(recipes.flatMap(r => r.tags || []))].sort();
   const reviewCount = recipes.filter(r => r.needsReview).length;
   const chips = [['all', 'All'], ['fav', '★ Favorites'], ['recent', 'Recent'],
@@ -140,16 +173,169 @@ function renderList() {
   const draw = () => {
     const rs = filtered();
     $('#count').textContent = `${rs.length} recipe${rs.length === 1 ? '' : 's'}`;
+    sw.reset();
     $('#rlist').innerHTML = rs.length ? rs.map(r => `
-      <li data-id="${r.id}"><div class="t">${hl(r.title || 'Untitled')}${r.favorite ? ' <span title="Favorite">★</span>' : ''}${r.needsReview ? '<span class="badge review">review</span>' : ''}</div>
-      <div class="m">${[r.ingredients.filter(i => i.item).length + ' ingredients', ...(r.tags || []), r.origin].filter(Boolean).map(h).join(' · ')}</div></li>`).join('')
+      <li class="swipe" data-id="${r.id}"><button class="sw-del" tabindex="-1">Delete</button><div class="sw-body">
+      <div class="t">${hl(r.title || 'Untitled')}${r.favorite ? ' <span title="Favorite">★</span>' : ''}${r.needsReview ? '<span class="badge review">review</span>' : ''}</div>
+      <div class="m">${[r.ingredients.filter(i => i.item).length + ' ingredients', ...(r.tags || []), r.origin].filter(Boolean).map(h).join(' · ')}</div></div></li>`).join('')
       : `<div class="empty">Nothing matches. ${listState.q ? 'Try fewer words.' : ''}</div>`;
   };
+  const sw = enableSwipe($('#rlist'));
   draw();
   $('#q').oninput = e => { listState.q = e.target.value; draw(); };
   view.querySelectorAll('.chip').forEach(c => c.onclick = () => { listState.filter = c.dataset.f; renderList(); });
-  $('#rlist').onclick = e => { const li = e.target.closest('li[data-id]'); if (li) { listState.scroll = window.scrollY; go('#/r/' + li.dataset.id); } };
+  $('#rlist').onclick = async e => {
+    if (sw.justSwiped()) return;
+    const li = e.target.closest('li[data-id]'); if (!li) return;
+    if (e.target.closest('.sw-del')) {
+      const r = recipes.find(x => x.id === li.dataset.id); if (!r) return;
+      if (!confirm(`Delete “${r.title || 'Untitled'}”? It will be removed from the cookbook on every device.`)) { sw.close(); return; }
+      r.deleted = true; await saveRecipe(r); draw(); toast('Deleted'); return;
+    }
+    if (sw.isOpen(li)) { sw.close(); return; }
+    listState.scroll = window.scrollY; go('#/r/' + li.dataset.id);
+  };
   if (listState.scroll) { window.scrollTo(0, listState.scroll); listState.scroll = 0; }
+}
+
+// Swipe a row left to reveal its Delete button (touch screens).
+function enableSwipe(list) {
+  const W = 92; let start = null, open = null, swiped = 0;
+  const setX = (li, x, anim) => {
+    const b = li.querySelector('.sw-body'); if (!b) return;
+    b.style.transition = anim ? 'transform .2s ease' : 'none'; b.style.transform = x ? `translateX(${x}px)` : '';
+  };
+  list.addEventListener('touchstart', e => {
+    const li = e.target.closest('li.swipe'); if (!li) { start = null; return; }
+    if (open && open !== li) { setX(open, 0, true); open = null; }
+    start = { x: e.touches[0].clientX, y: e.touches[0].clientY, li, base: li === open ? -W : 0, dir: '' };
+  }, { passive: true });
+  list.addEventListener('touchmove', e => {
+    if (!start) return;
+    const dx = e.touches[0].clientX - start.x, dy = e.touches[0].clientY - start.y;
+    if (!start.dir) { if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return; start.dir = Math.abs(dx) > Math.abs(dy) ? 'h' : 'v'; }
+    if (start.dir !== 'h') return;
+    e.preventDefault();
+    setX(start.li, Math.max(-W * 1.4, Math.min(0, start.base + dx)), false);
+  }, { passive: false });
+  list.addEventListener('touchend', e => {
+    if (start?.dir === 'h') {
+      const dx = e.changedTouches[0].clientX - start.x, isOpen = start.base + dx < -W / 2;
+      setX(start.li, isOpen ? -W : 0, true); open = isOpen ? start.li : null; swiped = Date.now();
+    }
+    start = null;
+  });
+  return {
+    isOpen: li => li === open,
+    close: () => { if (open) { setX(open, 0, true); open = null; } },
+    reset: () => { open = null; start = null; },
+    justSwiped: () => Date.now() - swiped < 350,
+  };
+}
+
+/* ---------- ideas (search by ingredient / style) ---------- */
+// scope: 'ing' = title, tags and ingredients · 'title' = title, tags and description · 'all' = everything incl. steps
+const MEAT = ['chicken', 'beef', 'steak', 'pork', 'bacon', 'ham', 'sausage', 'turkey', 'lamb', 'veal', 'chorizo', 'prosciutto',
+  'pancetta', 'pepperoni', 'salami', 'hot dog', 'hotlink', 'meatball', 'meat', 'brisket', 'chuck', 'tenderloin', 'filet', 'sirloin',
+  'ribeye', 'fish', 'salmon', 'shrimp', 'tuna', 'cod', 'tilapia', 'crab', 'scallop', 'lobster', 'clam', 'mussel', 'anchov', 'gelatin', 'broth', 'stock'];
+const IDEAS = [
+  ['Protein', [
+    ['Chicken', 'ing', ['chicken']],
+    ['Beef', 'ing', ['beef', 'steak', 'chuck', 'brisket', 'filet', 'tenderloin', 'sirloin', 'ribeye', 'meatball', 'meat loaf', 'reuben', 'goulash']],
+    ['Pork', 'ing', ['pork', 'bacon', 'ham', 'sausage', 'chorizo', 'prosciutto', 'pancetta', 'hotlink', 'hot link']],
+    ['Turkey', 'ing', ['turkey']],
+    ['Seafood', 'ing', ['fish', 'salmon', 'shrimp', 'tuna', 'cod', 'tilapia', 'crab', 'scallop', 'lobster', 'clam', 'mussel', 'halibut']],
+    ['Vegetarian', 'veg'],
+  ]],
+  ['Style', [
+    ['Mexican', 'all', ['mexican', 'taco', 'enchilada', 'burrito', 'fajita', 'quesadilla', 'tortilla', 'salsa', 'poblano', 'jalapeno', 'chipotle', 'ancho', 'queso', 'santa fe', 'southwestern']],
+    ['Italian', 'all', ['italian', 'pasta', 'parmesan', 'mozzarella', 'marinara', 'pesto', 'lasagna', 'ziti', 'risotto', 'focaccia', 'prosciutto', 'ricotta', 'basil']],
+    ['Asian', 'all', ['asian', 'soy sauce', 'teriyaki', 'hoisin', 'sesame', 'ginger', 'kung pao', 'thai', 'stir fry', 'stir-fry', 'sriracha', 'peanut sauce', 'sate', 'satay', 'tempura', 'luau', 'rice vinegar']],
+    ['BBQ', 'all', ['bbq', 'barbecue', 'pulled pork', 'smoked', 'rib']],
+    ['Spicy', 'all', ['spicy', 'hot sauce', 'buffalo', 'cayenne', 'jalapeno', 'chipotle', 'red pepper flake', 'crushed red pepper', 'sriracha', 'habanero']],
+  ]],
+  ['Kind of dish', [
+    ['Pasta & noodles', 'ing', ['pasta', 'spaghetti', 'penne', 'macaroni', 'noodle', 'linguine', 'fettuccine', 'rigatoni', 'lasagna', 'ziti', 'orzo', 'tortellini', 'ravioli', 'rotini', 'cavatappi', 'couscous']],
+    ['Soup & chili', 'title', ['soup', 'stew', 'chili', 'chowder', 'bisque', 'goulash']],
+    ['Salad', 'title', ['salad']],
+    ['Casserole & bakes', 'title', ['casserole', 'bake', 'potpie', 'pot pie', 'shepherd', 'sheppard', 'ziti', 'lasagna', 'divan']],
+    ['Sandwiches & wraps', 'title', ['sandwich', 'wrap', 'reuben', 'burger', 'sub', 'panini', 'sliders']],
+    ['Sides', 'title', ['side', 'potato', 'green bean', 'asparagus', 'stuffing', 'hash brown', 'rice', 'vegetable', 'hush pupp', 'biscuit']],
+    ['Dips & apps', 'title', ['dip', 'appetizer', 'bites', 'wings']],
+    ['Sauces & rubs', 'title', ['sauce', 'marinade', 'rub', 'seasoning', 'vinaigrette', 'glaze', 'dressing', 'batter']],
+    ['Breakfast', 'title', ['breakfast', 'pancake', 'waffle', 'french toast', 'omelet', 'frittata', 'quiche', 'hash brown', 'granola']],
+    ['Desserts & baking', 'title', ['cake', 'cookie', 'brownie', 'pie', 'dessert', 'pudding', 'cobbler', 'crisp', 'cheesecake', 'fudge', 'lemon bars', 'bread', 'muffin', 'tart']],
+    ['Drinks', 'title', ['punch', 'cider', 'limeade', 'lemonade', 'cocktail', 'smoothie', 'tea', 'sangria']],
+  ]],
+  ['How', [
+    ['On the grill', 'all', ['grill', 'grilled', 'kabob', 'kabab', 'kebab']],
+    ['Slow cooker', 'all', ['slow cooker', 'crock', 'crockpot', 'crock-pot']],
+    ['30 min or less', 'quick'],
+  ]],
+].map(([group, items]) => [group, items.map(([label, scope, words]) => ({ label, scope, re: words &&
+  new RegExp('\\b(' + words.map(w => norm(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '\\s+')).join('|') + ')', 'i') }))]);
+const MEAT_RE = new RegExp('\\b(' + MEAT.join('|') + ')', 'i');
+const ideaState = { sel: new Set(), have: '' };
+
+function minutes(t) {
+  t = norm(t || ''); if (!t) return null;
+  let m = 0, found = false;
+  for (const [, n, u] of t.matchAll(/(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes)\b/g)) { found = true; m += /^h/.test(u) ? n * 60 : +n; }
+  if (!found && /^\d+$/.test(t.trim())) { found = true; m = +t; }
+  return found ? m : null;
+}
+function hay(r) {
+  if (r._h) return r._h;
+  const ing = norm([r.title, (r.tags || []).join(' '), ...(r.ingredients || []).map(i => i.item || '')].join(' \n '));
+  return (r._h = { ing, title: norm([r.title, (r.tags || []).join(' '), r.description].join(' \n ')), all: r._s });
+}
+function ideaMatch(r, idea) {
+  const hy = hay(r);
+  if (idea.scope === 'veg') return !MEAT_RE.test(hy.ing);
+  if (idea.scope === 'quick') { const p = minutes(r.prepTime), c = minutes(r.cookTime); return (p != null || c != null) && (p || 0) + (c || 0) <= 30; }
+  return idea.re.test(hy[idea.scope]);
+}
+
+function renderIdeas() {
+  setTop('Search Ideas', true); showFab(false);
+  const all = IDEAS.flatMap(([, items]) => items);
+  view.innerHTML = `
+    <div class="ideas-have form">
+      <input type="text" id="have" value="${h(ideaState.have)}" placeholder="Got something to use up? e.g. chicken, rice, peppers" autocomplete="off">
+    </div>
+    ${IDEAS.map(([group, items]) => `<div class="idea-group"><div class="idea-label">${h(group)}</div><div class="chips wrap">${items.map(it => {
+      const n = recipes.filter(r => ideaMatch(r, it)).length;
+      return `<button class="chip ${ideaState.sel.has(it.label) ? 'on' : ''} ${n ? '' : 'zero'}" data-l="${h(it.label)}">${h(it.label)} <span class="n">${n}</span></button>`;
+    }).join('')}</div></div>`).join('')}
+    <div class="actions"><button class="btn" id="clearIdeas">Clear</button></div>
+    <div class="count" id="icount"></div>
+    <ul class="rlist" id="ilist"></ul>`;
+  const draw = () => {
+    const sel = all.filter(it => ideaState.sel.has(it.label));
+    const words = norm(ideaState.have).split(/[,\s]+/).filter(w => w.length > 1 && !['and', 'or', 'with', 'the', 'some'].includes(w));
+    if (!sel.length && !words.length) { $('#icount').textContent = 'Pick one or more above, or type what you have.'; $('#ilist').innerHTML = ''; return; }
+    const res = [];
+    for (const r of recipes) {
+      if (!sel.every(it => ideaMatch(r, it))) continue;
+      const got = words.filter(w => hay(r).ing.includes(w) || r._s.includes(w));
+      if (words.length && !got.length) continue;
+      res.push({ r, got });
+    }
+    res.sort((a, b) => b.got.length - a.got.length || (b.r.favorite - a.r.favorite) || (b.r.rating || 0) - (a.r.rating || 0) || a.r.title.localeCompare(b.r.title));
+    $('#icount').textContent = `${res.length} idea${res.length === 1 ? '' : 's'}`;
+    $('#ilist').innerHTML = res.length ? res.map(({ r, got }) => `
+      <li data-id="${r.id}"><div class="t">${h(r.title || 'Untitled')}${r.favorite ? ' <span title="Favorite">★</span>' : ''}</div>
+      <div class="m">${[...sel.map(it => it.label), ...(words.length ? [`has ${got.join(', ')}${got.length < words.length ? ` (${got.length} of ${words.length})` : ''}`] : [])].map(h).join(' · ')}</div></li>`).join('')
+      : '<div class="empty">No matches. Try fewer choices.</div>';
+  };
+  draw();
+  view.querySelectorAll('.idea-group .chip').forEach(c => c.onclick = () => {
+    const l = c.dataset.l; ideaState.sel.has(l) ? ideaState.sel.delete(l) : ideaState.sel.add(l);
+    c.classList.toggle('on'); draw();
+  });
+  $('#have').oninput = e => { ideaState.have = e.target.value; draw(); };
+  $('#clearIdeas').onclick = () => { ideaState.sel.clear(); ideaState.have = ''; renderIdeas(); };
+  $('#ilist').onclick = e => { const li = e.target.closest('li[data-id]'); if (li) go('#/r/' + li.dataset.id); };
 }
 
 /* ---------- recipe view / cook mode ---------- */
@@ -173,6 +359,9 @@ async function renderRecipe(id, cook) {
       ${r.cookTime ? `<span>Cook ${h(r.cookTime)}</span>` : ''}
       ${(r.tags || []).map(t => `<span class="badge">${h(t)}</span>`).join('')}
     </div>
+    ${cook ? (r.notes ? `<section class="notes-box"><div class="nb-head"><h3>Notes</h3></div><div class="notes">${h(r.notes)}</div></section>` : '')
+      : `<section class="notes-box" id="notesBox"><div class="nb-head"><h3>Notes</h3><button class="btn small" id="editNotes">Edit</button></div>
+      <div class="notes" id="notesText">${r.notes ? h(r.notes) : '<span class="muted">No notes yet. Tap Edit to add some.</span>'}</div></section>`}
     ${cook ? '' : `<div class="actions">
       <button class="btn primary" id="cook">🍳 Cook mode</button>
       <button class="btn" id="fav">${r.favorite ? '★ Favorite' : '☆ Favorite'}</button>
@@ -188,7 +377,6 @@ async function renderRecipe(id, cook) {
       : `<li><span class="a">${h([i.amount, i.unit].filter(Boolean).join(' '))}</span><span>${h(i.item)}</span></li>`).join('')}</ul>
     <h3>Directions</h3>
     <ol class="steps">${steps}</ol>
-    ${r.notes ? `<h3>Notes</h3><div class="notes">${h(r.notes)}</div>` : ''}
     <div class="meta-row" style="margin-top:20px">
       ${r.source ? `<span>Source: ${h(r.source)}</span>` : ''}
       ${r.sourceUrl ? `<span><a href="${h(r.sourceUrl)}" target="_blank" rel="noopener">Original link ↗</a></span>` : ''}
@@ -203,6 +391,14 @@ async function renderRecipe(id, cook) {
   else {
     $('#cook').onclick = () => go(`#/r/${id}/cook`);
     $('#edit').onclick = () => go(`#/r/${id}/edit`);
+    $('#editNotes').onclick = () => {
+      $('#notesBox').innerHTML = `<div class="nb-head"><h3>Notes</h3></div>
+        <div class="form"><textarea id="notesTa" rows="5" placeholder="Tweaks, what we'd change, who liked it…">${h(r.notes || '')}</textarea></div>
+        <div class="actions"><button class="btn primary" id="saveNotes">Save notes</button><button class="btn" id="cancelNotes">Cancel</button></div>`;
+      $('#notesTa').focus();
+      $('#saveNotes').onclick = async () => { r.notes = $('#notesTa').value.trim(); await saveRecipe(r); toast('Notes saved'); renderRecipe(id, false); };
+      $('#cancelNotes').onclick = () => renderRecipe(id, false);
+    };
     $('#fav').onclick = async () => { r.favorite = !r.favorite; await saveRecipe(r); renderRecipe(id, false); };
     $('#stars').onclick = async e => { const n = +e.target.dataset.n; if (!n) return; r.rating = r.rating === n ? 0 : n; await saveRecipe(r); renderRecipe(id, false); };
     if ($('#share')) $('#share').onclick = () => navigator.share({ title: r.title, text: recipeAsText(r) }).catch(() => {});
@@ -214,7 +410,7 @@ async function renderRecipe(id, cook) {
     for (const key of r.images) {
       try {
         const img = document.createElement('img'); img.src = await imageUrl(key); img.alt = 'Recipe source photo';
-        img.onclick = () => { const lb = document.createElement('div'); lb.className = 'lightbox'; lb.innerHTML = `<img src="${img.src}">`; lb.onclick = () => lb.remove(); document.body.append(lb); };
+        img.onclick = () => lightbox(img.src);
         box.append(img);
       } catch { /* offline and not cached */ }
     }
@@ -284,45 +480,44 @@ function renderEdit(id, draft) {
   $('#cancel').onclick = () => history.back();
   if ($('#del')) $('#del').onclick = async () => {
     if (!confirm(`Delete “${r.title}”?`)) return;
-    r.deleted = true; await saveRecipe(r); toast('Deleted'); location.replace('#/');
+    r.deleted = true; await saveRecipe(r); toast('Deleted'); location.replace('#/recipes');
   };
 }
 
 /* ---------- add / import ---------- */
-function renderAdd() {
-  setTop('Add a recipe', true); showFab(false);
+const ADD_KINDS = {
+  photos: { ico: '📸', title: 'From photos & screenshots', sub: 'Pick all the screenshots for one recipe' },
+  link:   { ico: '🔗', title: 'From a link', sub: 'TikTok, a recipe website…' },
+  text:   { ico: '🎙️', title: 'Type, paste or dictate', sub: 'A caption, a note, or talk it through' },
+};
+function renderAdd(kind) {
   const online = hasServer();
+  const needServer = online ? '' : `<div class="panel">📶 Importing needs the server set up first — <a href="#/settings">Settings</a>.</div>`;
+  if (!ADD_KINDS[kind]) {
+    setTop('Add a Recipe', true); showFab(false);
+    view.innerHTML = needServer + Object.entries(ADD_KINDS).map(([k, t]) =>
+      `<a class="tile" href="#/add/${k}"><span class="ico">${t.ico}</span><span><b>${t.title}</b><small>${t.sub}</small></span></a>`).join('');
+    return;
+  }
+  const t = ADD_KINDS[kind];
+  setTop(t.title, true); showFab(false);
   const off = online ? '' : 'disabled';
-  view.innerHTML = `
-  ${online ? '' : `<div class="panel">📶 Photo, link and text import need the server set up first —
-     <a href="#/settings">Settings</a>. You can still type a recipe in by hand.</div>`}
-  <div class="panel">
-    <h3>📸 From screenshots or photos</h3>
-    <div class="hint">Pick all the screenshots for <b>one</b> recipe, in order.</div>
-    <input type="file" id="photos" accept="image/*" multiple ${off} style="margin-top:10px">
-    <div class="thumbs" id="thumbs"></div>
-    <div class="actions"><button class="btn primary" id="goPhotos" disabled>Read recipe</button></div>
-  </div>
-  <div class="panel">
-    <h3>🔗 From a link</h3>
-    <div class="hint">TikTok, a recipe website… Reads the caption or page, and follows the creator’s recipe link if there is one.</div>
-    <div class="form"><input type="url" id="url" placeholder="Paste link" ${off}></div>
-    <div class="actions"><button class="btn primary" id="goUrl" ${off}>Get recipe</button></div>
-  </div>
-  <div class="panel">
-    <h3>🎙️ Type, paste or dictate</h3>
-    <div class="hint">Messy is fine — tap the keyboard mic and talk it through while the video plays.</div>
-    <div class="form"><textarea id="txt" rows="5" placeholder="two cups flour, a stick of butter, bake at 375 for like 20 min…" ${off}></textarea></div>
-    <div class="actions"><button class="btn primary" id="goTxt" ${off}>Make it a recipe</button></div>
-  </div>
-  <div class="panel">
-    <h3>✍️ By hand</h3>
-    <div class="actions"><button class="btn" id="goBlank">Blank recipe</button></div>
-  </div>
-  <div id="status"></div>`;
-  $('#goBlank').onclick = () => go('#/new');
+  const body = {
+    photos: `<div class="hint big">Pick every screenshot for <b>one</b> recipe, in order. Up to 10.</div>
+      <label class="btn big ${off ? 'disabled' : ''}" for="photos">Choose screenshots</label>
+      <input type="file" id="photos" accept="image/*" multiple ${off} hidden>
+      <div class="thumbs" id="thumbs"></div>
+      <button class="btn primary big" id="goPhotos" disabled>Read recipe</button>`,
+    link: `<div class="hint big">Paste a TikTok or recipe-website link. I’ll read the caption or page, and follow the creator’s recipe link if there is one.</div>
+      <div class="form"><input type="url" id="url" placeholder="Paste link" ${off}></div>
+      <button class="btn primary big" id="goUrl" ${off}>Get recipe</button>`,
+    text: `<div class="hint big">Paste a caption or some text, or tap the keyboard mic and talk it through. Messy is fine.</div>
+      <div class="form"><textarea id="txt" rows="8" placeholder="two cups flour, a stick of butter, bake at 375 for like 20 min…" ${off}></textarea></div>
+      <button class="btn primary big" id="goTxt" ${off}>Make it a recipe</button>`,
+  }[kind];
+  view.innerHTML = `${needServer}<div class="panel add-page"><h2><span class="ico">${t.ico}</span>${t.title}</h2>${body}</div><div id="status"></div>`;
   let files = [];
-  $('#photos').onchange = e => {
+  if ($('#photos')) $('#photos').onchange = e => {
     files = [...e.target.files];
     $('#thumbs').innerHTML = files.map(f => `<img src="${URL.createObjectURL(f)}">`).join('');
     $('#goPhotos').disabled = !files.length;
@@ -342,20 +537,20 @@ function renderAdd() {
         : 'Check it over, then Save', 4000);
     } catch (e) {
       view.querySelectorAll('button, input, textarea').forEach(b => b.disabled = false);
-      $('#goPhotos').disabled = !files.length;
-      const shots = ['video_only', 'elsewhere', 'none'].includes(e.code);
+      if ($('#goPhotos')) $('#goPhotos').disabled = !files.length;
+      const shots = kind !== 'photos' && ['video_only', 'elsewhere', 'none'].includes(e.code);
       $('#status').innerHTML = `<div class="panel">${shots ? '🎬' : '❌'} ${h(e.message)}
         ${shots ? '<div class="actions"><button class="btn primary" id="useShots">📸 Pick screenshots</button></div>' : ''}</div>`;
-      if (shots) $('#useShots').onclick = () => { $('#photos').scrollIntoView({ behavior: 'smooth', block: 'center' }); $('#photos').click(); };
+      if (shots) $('#useShots').onclick = () => go('#/add/photos');
     }
   };
-  $('#goPhotos').onclick = async () => {
+  if ($('#goPhotos')) $('#goPhotos').onclick = async () => {
     const fd = new FormData();
     for (const f of files) fd.append('images', await shrinkImage(f), f.name.replace(/\.\w+$/, '') + '.jpg');
     run(fd, `Reading ${files.length} image${files.length > 1 ? 's' : ''}… (usually under a minute)`);
   };
-  $('#goUrl').onclick = () => { const u = $('#url').value.trim(); if (!u) return; const fd = new FormData(); fd.append('url', u); run(fd, 'Fetching…'); };
-  $('#goTxt').onclick = () => { const t = $('#txt').value.trim(); if (!t) return; const fd = new FormData(); fd.append('text', t); run(fd, 'Writing it up…'); };
+  if ($('#goUrl')) $('#goUrl').onclick = () => { const u = $('#url').value.trim(); if (!u) return; const fd = new FormData(); fd.append('url', u); run(fd, 'Fetching…'); };
+  if ($('#goTxt')) $('#goTxt').onclick = () => { const t = $('#txt').value.trim(); if (!t) return; const fd = new FormData(); fd.append('text', t); run(fd, 'Writing it up…'); };
 }
 
 /* ---------- settings ---------- */

@@ -52,6 +52,51 @@ a { color: var(--accent); }
 .badge.review { background: #fdf0d5; color: var(--warn); }
 mark { background: #ffe08a; color: inherit; border-radius: 2px; }
 
+/* home */
+.home { display: flex; flex-direction: column; align-items: center; padding-top: 4px; }
+.home-art { display: block; height: 30vh; max-height: 340px; min-height: 160px; aspect-ratio: 1; border-radius: 20px;
+  object-fit: cover; margin: 4px auto 22px; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+.pills { width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 14px; }
+.pill { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 62px; padding: 0 22px;
+  border-radius: 31px; background: var(--accent); color: #fff; font-size: 1.25rem; font-weight: 600; text-decoration: none;
+  box-shadow: 0 3px 10px rgba(0,0,0,.18); -webkit-tap-highlight-color: transparent; }
+.pill:active { transform: scale(.98); filter: brightness(.95); }
+.pill .ico { font-size: 1.4rem; }
+.home-count { color: var(--muted); font-size: .85rem; margin-top: 18px; }
+
+/* grilling chart */
+.chart { display: block; width: 100%; max-width: 640px; margin: 0 auto 8px; border-radius: 10px; cursor: zoom-in; }
+
+/* add a recipe */
+.tile { display: flex; align-items: center; gap: 16px; padding: 22px 18px; margin-bottom: 14px; border-radius: 18px;
+  background: var(--card); border: 1px solid var(--line); color: var(--ink); text-decoration: none; font-size: 1.2rem;
+  -webkit-tap-highlight-color: transparent; }
+.tile:active { background: var(--accent-soft); }
+.tile .ico { font-size: 2.3rem; flex: none; }
+.tile small { display: block; color: var(--muted); font-size: .85rem; font-weight: 400; margin-top: 3px; }
+.add-page h2 { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; font-size: 1.35rem; }
+.add-page h2 .ico { font-size: 1.8rem; }
+.hint.big { font-size: .98rem; line-height: 1.4; margin-bottom: 12px; }
+.add-page .form input, .add-page .form textarea { font-size: 1.1rem; padding: 14px; }
+.btn.big { display: block; width: 100%; text-align: center; padding: 15px 22px; font-size: 1.15rem; border-radius: 26px; margin-top: 14px; }
+.btn.disabled { opacity: .5; pointer-events: none; }
+.add-page .thumbs img { width: 84px; height: 84px; }
+
+/* ideas */
+.ideas-have input { font-size: 1.05rem; }
+.idea-group { margin-top: 12px; }
+.idea-label { font-size: .78rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 2px 2px; }
+.chips.wrap { flex-wrap: wrap; overflow: visible; }
+.chip .n { opacity: .6; font-size: .75rem; margin-left: 2px; }
+.chip.zero { opacity: .45; }
+
+/* swipe to delete */
+.rlist li.swipe { position: relative; overflow: hidden; padding: 0; border: 0; background: none; }
+.rlist li.swipe .sw-body { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 11px 14px; will-change: transform; }
+.sw-del { position: absolute; top: 0; right: 0; bottom: 0; width: 120px; padding-left: 28px; border: 0;
+  border-radius: var(--radius); background: #c0392b; color: #fff; font-weight: 600; cursor: pointer; }
+
 /* recipe */
 .recipe h2 { font-size: 1.5rem; margin: 6px 0 4px; }
 .desc { color: var(--muted); font-style: italic; }
@@ -71,6 +116,11 @@ mark { background: #ffe08a; color: inherit; border-radius: 2px; }
 .steps { padding-left: 24px; margin: 0; }
 .steps li { padding: 6px 0; line-height: 1.45; cursor: pointer; }
 .notes { white-space: pre-wrap; }
+.notes-box { margin: 6px 0 4px; }
+.nb-head { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); margin: 14px 0 8px; }
+.recipe .nb-head h3 { border: 0; margin: 0; padding: 0 0 4px; }
+.btn.small { padding: 3px 12px; font-size: .85rem; margin-bottom: 4px; }
+.muted { color: var(--muted); font-style: italic; }
 .photos { display: flex; gap: 8px; overflow-x: auto; margin: 10px 0; }
 .photos img { height: 150px; border-radius: 8px; border: 1px solid var(--line); cursor: zoom-in; }
 .stars button { background: none; border: 0; font-size: 1.3rem; padding: 0 1px; cursor: pointer; color: var(--warn); }
