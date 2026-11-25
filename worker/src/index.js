@@ -210,14 +210,19 @@ function parseIngredient(line) {
 }
 
 /* ---------- AI ---------- */
-async function aiFetch(url, opts) {
-  try { return await fetch(url, { ...opts, signal: AbortSignal.timeout(AI_TIMEOUT_MS) }); }
+async function aiFetch(url, opts, deadline) {
+  const left = deadline - Date.now();
+  if (left < 5_000) throw fail('The AI took too long to read this. Try again, or send fewer screenshots at a time.', 504);
+  try { return await fetch(url, { ...opts, signal: AbortSignal.timeout(left) }); }
   catch (e) {
     if (e.name === 'TimeoutError' || e.name === 'AbortError')
       throw fail('The AI took too long to read this. Try again, or send fewer screenshots at a time.', 504);
     throw e;
   }
 }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const BUSY = new Set([429, 500, 503]);   // "high demand", rate limit, hiccup: worth another try
+
 const PROMPT = `You turn recipe material into a structured recipe. The material may be screenshots (in order, possibly
 overlapping or cut off between images), a social-media caption, web page text, or someone's rambling dictation.
 
@@ -239,7 +244,18 @@ Return ONLY JSON, no prose, in this shape:
 async function aiParse(env, text, images) {
   const provider = (env.AI_PROVIDER || 'gemini').toLowerCase();
   const material = text ? `\n\nMaterial (text):\n${text}` : '';
-  const raw = provider === 'anthropic' ? await callClaude(env, PROMPT + material, images) : await callGemini(env, PROMPT + material, images);
+  const deadline = Date.now() + AI_TIMEOUT_MS;   // one time budget for all tries combined
+  let raw;
+  if (provider === 'anthropic') raw = await callClaude(env, PROMPT + material, images, deadline, env.AI_MODEL);
+  else {
+    try { raw = await callGemini(env, PROMPT + material, images, deadline); }
+    catch (e) {
+      // Gemini still busy after retries: use Claude instead, if a key is set up (optional, paid, ~fraction of a cent)
+      if (!e.busy || !env.ANTHROPIC_API_KEY) throw e;
+      console.log('Gemini busy, falling back to Claude');
+      raw = await callClaude(env, PROMPT + material, images, deadline);
+    }
+  }
   const m = raw.match(/\{[\s\S]*\}/);
   if (!m) throw fail('The AI did not return a recipe. Try again or use screenshots.', 502);
   let r; try { r = JSON.parse(m[0]); } catch { throw fail('The AI returned something unreadable. Try again.', 502); }
@@ -254,35 +270,41 @@ async function aiParse(env, text, images) {
   };
 }
 
-async function callGemini(env, prompt, images) {
+async function callGemini(env, prompt, images, deadline) {
   if (!env.GEMINI_API_KEY) throw fail('GEMINI_API_KEY is not set on the Worker', 500);
-  const model = env.AI_MODEL || 'gemini-2.5-flash';
+  const model = env.AI_MODEL || 'gemini-3.8-flash';
   const parts = [...images.map(i => ({ inline_data: { mime_type: i.mime, data: toBase64(i.buf) } })), { text: prompt }];
   // Reading a recipe doesn't need long "thinking", which is what made big imports slow.
   // 2.x models take a token budget; 3.x models take a level.
-  const thinkingConfig = /gemini-2\./.test(model) ? { thinkingBudget: 0 } : { thinkingLevel: 'low' };
-  const call = (gen) => aiFetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-    body: JSON.stringify({ contents: [{ parts }], generationConfig: gen }),
-  });
-  const base = { responseMimeType: 'application/json', temperature: 0.1 };
-  let r = await call({ ...base, thinkingConfig });
-  let j = await r.json().catch(() => ({}));
-  if (r.status === 400 && /think/i.test(j.error?.message || '')) {   // model doesn't accept that setting: run without it
-    r = await call(base); j = await r.json().catch(() => ({}));
+  let thinkingConfig = /gemini-2\./.test(model) ? { thinkingBudget: 0 } : { thinkingLevel: 'low' };
+  const waits = [2_000, 5_000, 10_000];          // pauses before retry 1, 2, 3 when Gemini is busy
+  for (let attempt = 0; ; attempt++) {
+    const gen = { responseMimeType: 'application/json', temperature: 0.1, ...(thinkingConfig ? { thinkingConfig } : {}) };
+    const r = await aiFetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+      body: JSON.stringify({ contents: [{ parts }], generationConfig: gen }),
+    }, deadline);
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) return j.candidates?.[0]?.content?.parts?.filter(p => !p.thought).map(p => p.text || '').join('') || '';
+    const msg = j.error?.message || String(r.status);
+    if (r.status === 400 && thinkingConfig && /think/i.test(msg)) { thinkingConfig = null; attempt--; continue; }  // model doesn't take that setting
+    const wait = waits[attempt];
+    if (BUSY.has(r.status) && wait !== undefined && deadline - Date.now() > wait + 20_000) { await sleep(wait); continue; }
+    const e = fail(BUSY.has(r.status) ? 'Gemini is busy right now (tried ' + (attempt + 1) + ' times). Try again in a few minutes.'
+      : 'Gemini error: ' + msg, 502);
+    e.busy = BUSY.has(r.status);
+    throw e;
   }
-  if (!r.ok) throw fail('Gemini error: ' + (j.error?.message || r.status), 502);
-  return j.candidates?.[0]?.content?.parts?.filter(p => !p.thought).map(p => p.text || '').join('') || '';
 }
 
-async function callClaude(env, prompt, images) {
+async function callClaude(env, prompt, images, deadline, model = 'claude-haiku-5-5') {
   if (!env.ANTHROPIC_API_KEY) throw fail('ANTHROPIC_API_KEY is not set on the Worker', 500);
   const content = [...images.map(i => ({ type: 'image', source: { type: 'base64', media_type: i.mime, data: toBase64(i.buf) } })),
     { type: 'text', text: prompt }];
   const r = await aiFetch('https://api.anthropic.com/v1/messages', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: env.AI_MODEL || 'claude-haiku-5-5', max_tokens: 4096, messages: [{ role: 'user', content }] }),
-  });
+    body: JSON.stringify({ model: model || 'claude-haiku-5-5', max_tokens: 4096, messages: [{ role: 'user', content }] }),
+  }, deadline);
   const j = await r.json();
   if (!r.ok) throw fail('Claude error: ' + (j.error?.message || r.status), 502);
   return (j.content || []).map(c => c.text || '').join('');
