@@ -305,7 +305,7 @@ function renderAdd() {
   </div>
   <div class="panel">
     <h3>🔗 From a link</h3>
-    <div class="hint">TikTok, a recipe website, Instagram… (uses the caption or the page’s recipe)</div>
+    <div class="hint">TikTok, a recipe website… Reads the caption or page, and follows the creator’s recipe link if there is one.</div>
     <div class="form"><input type="url" id="url" placeholder="Paste link" ${off}></div>
     <div class="actions"><button class="btn primary" id="goUrl" ${off}>Get recipe</button></div>
   </div>
@@ -330,16 +330,23 @@ function renderAdd() {
   const run = async (fd, label) => {
     view.querySelectorAll('button, input, textarea').forEach(b => b.disabled = true);
     $('#status').innerHTML = `<div class="panel"><span class="busy"></span>${label}</div>`;
+    $('#status').scrollIntoView({ behavior: 'smooth', block: 'center' });
     try {
       fd.append('addedBy', settings().name || '');
       const res = await api('/api/import', { method: 'POST', body: fd });
-      const { recipe } = await res.json();
+      const { recipe, status } = await res.json();
       const draft = { ...blankRecipe(), ...recipe, needsReview: true, addedBy: settings().name || '' };
       renderEdit(null, draft);
-      toast('Check it over, then Save');
+      toast(status === 'partial' ? 'Got part of it — check the video for the rest'
+        : / → /.test(recipe.origin || '') ? 'Found the full recipe on the creator’s site — check it over'
+        : 'Check it over, then Save', 4000);
     } catch (e) {
-      $('#status').innerHTML = `<div class="panel">❌ ${h(e.message)}</div>`;
       view.querySelectorAll('button, input, textarea').forEach(b => b.disabled = false);
+      $('#goPhotos').disabled = !files.length;
+      const shots = ['video_only', 'elsewhere', 'none'].includes(e.code);
+      $('#status').innerHTML = `<div class="panel">${shots ? '🎬' : '❌'} ${h(e.message)}
+        ${shots ? '<div class="actions"><button class="btn primary" id="useShots">📸 Pick screenshots</button></div>' : ''}</div>`;
+      if (shots) $('#useShots').onclick = () => { $('#photos').scrollIntoView({ behavior: 'smooth', block: 'center' }); $('#photos').click(); };
     }
   };
   $('#goPhotos').onclick = async () => {

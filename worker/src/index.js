@@ -25,7 +25,7 @@ export default {
       return json({ error: 'Not found' }, 404, cors);
     } catch (e) {
       console.error(e);
-      return json({ error: e.message || String(e) }, e.status || 500, cors);
+      return json({ error: e.message || String(e), ...(e.code ? { code: e.code } : {}) }, e.status || 500, cors);
     }
   },
 };
@@ -41,7 +41,7 @@ function corsHeaders(req, env) {
 function json(obj, status, headers) {
   return new Response(JSON.stringify(obj), { status, headers: { ...headers, 'Content-Type': 'application/json' } });
 }
-function fail(msg, status = 400) { const e = new Error(msg); e.status = status; return e; }
+function fail(msg, status = 400, code = '') { const e = new Error(msg); e.status = status; if (code) e.code = code; return e; }
 function uuid() { return crypto.randomUUID(); }
 function toBase64(buf) {
   const bytes = new Uint8Array(buf); let s = '';
@@ -103,33 +103,87 @@ async function importRecipe(req, env) {
   if (!images.length && !text && !link) throw fail('Nothing to import');
   if (images.length > MAX_IMAGES) throw fail(`Up to ${MAX_IMAGES} images per recipe`);
 
-  let recipe = null, sourceUrl = '', origin = '', context = text;
+  const deadline = Date.now() + AI_TIMEOUT_MS;      // one time budget for the whole import
   const saved = [];
   for (const f of images) saved.push(await saveImage(env, f));
+  let out;
+  try { out = link ? await importLink(env, link, text, saved, deadline) : await importMaterial(env, text, saved, deadline); }
+  catch (e) { await dropImages(env, saved); throw e; }      // don't leave orphan photos behind
 
-  if (link) {
-    sourceUrl = link;
-    const got = await fromLink(link);
-    origin = got.origin;
-    if (got.recipe) recipe = got.recipe;                         // structured recipe found on the page
-    else context = [got.text, context].filter(Boolean).join('\n\n');
-  }
-  if (!recipe) {
-    if (!context && !saved.length) throw fail('Could not find any recipe text at that link. Try screenshots instead.');
-    try { recipe = await aiParse(env, context, saved); }
-    catch (e) { await dropImages(env, saved); throw e; }      // don't leave orphan photos behind
-    origin = origin || (saved.length ? 'Screenshots' : 'Typed / dictated');
-  }
+  const { recipe, origin, status } = out;
+  if (status === 'partial')
+    recipe.notes = ['⚠️ Partial import: some of the recipe wasn’t in what I could read. Check the video or source for the rest.', recipe.notes].filter(Boolean).join('\n\n');
   const now = new Date().toISOString();
   const full = {
     id: uuid(), title: '', description: '', servings: '', prepTime: '', cookTime: '', ingredients: [], steps: [],
     notes: '', tags: [], favorite: false, rating: 0, source: '',
-    ...recipe, sourceUrl: sourceUrl || recipe.sourceUrl || '', origin, images: saved.map(s => s.key), addedBy,
+    ...recipe, sourceUrl: link || recipe.sourceUrl || '', origin, images: saved.map(s => s.key), addedBy,
     needsReview: true, createdAt: now, updatedAt: now, deleted: false,
   };
   if (save) await upsertRecipes(env, { recipes: [full] });
-  return { recipe: full, saved: save };
+  return { recipe: full, saved: save, status };
 }
+
+// Screenshots / typed / dictated
+async function importMaterial(env, text, saved, deadline) {
+  const ai = await aiParse(env, text, saved, deadline);
+  if (ai.status === 'none' || ai.status === 'pointer')
+    throw fail(ai.recipe.notes || 'No recipe found in that. Try clearer screenshots of the ingredients and steps.', 422, 'none');
+  return { recipe: ai.recipe, origin: saved.length ? 'Screenshots' : 'Typed / dictated', status: ai.status };
+}
+
+// Links: pick the cheapest route that works.
+//  1) the page has structured recipe data (most recipe sites)  → done, no AI
+//  2) caption / page text holds the whole recipe                → done
+//  3) it points to a website with the recipe                    → follow the link and read that
+//  4) only part of it                                           → save what's there, flagged "partial"
+//  5) nothing (recipe is only in the video)                     → tell her how to get it in
+async function importLink(env, link, extraText, saved, deadline) {
+  const got = await fromLink(link);
+  if (got.recipe) return { recipe: got.recipe, origin: got.origin, status: 'complete' };
+  const material = [got.text, extraText].filter(Boolean).join('\n\n');
+  const ai = await aiParse(env, material, saved, deadline);
+  console.log('import', got.origin, 'status:', ai.status, 'recipeUrl:', ai.recipeUrl);
+  if (ai.status === 'complete') return { recipe: ai.recipe, origin: got.origin, status: 'complete' };
+
+  // try any recipe link the caption gives
+  const candidates = [...new Set([ai.recipeUrl, ...urlsIn(material)].map(normalizeUrl).filter(Boolean))]
+    .filter(u => !SKIP_HOSTS.test(new URL(u).hostname)).slice(0, 3);
+  for (const url of candidates) {
+    if (deadline - Date.now() < 20_000) break;
+    try {
+      const site = await fromLink(url);
+      const host = new URL(url).hostname.replace(/^www\./, '');
+      const origin = `${got.origin} → ${host}`;
+      const note = `Full recipe: ${url}`;
+      if (site.recipe) { console.log('followed', url, 'structured'); return { recipe: withNote(site.recipe, note), origin, status: 'complete' }; }
+      const ai2 = await aiParse(env, `${material}\n\nThe linked page (${url}):\n${site.text}`, [], deadline);
+      console.log('followed', url, 'status:', ai2.status);
+      if (ai2.status === 'complete' || (ai2.status === 'partial' && ai.status !== 'partial'))
+        return { recipe: withNote(ai2.recipe, note), origin, status: ai2.status };
+    } catch (e) { console.log('follow failed', url, e.message); }
+  }
+  if (ai.status === 'partial') return { recipe: ai.recipe, origin: got.origin, status: 'partial' };
+  const isTikTok = /tiktok/i.test(got.origin);
+  if (ai.status === 'pointer')
+    throw fail((isTikTok ? 'The creator says the recipe is somewhere else (their website, “link in bio”, or the comments), '
+      : 'That page points somewhere else for the recipe, ') + 'and there was no link I could follow. '
+      + 'Screenshots of the ingredients and steps from the video will work instead.', 422, 'elsewhere');
+  throw fail(isTikTok ? 'This TikTok’s caption doesn’t include the recipe. It’s probably only in the video: '
+    + 'take screenshots where the ingredients and steps show, then use 📸.'
+    : 'Couldn’t find a recipe on that page. Try screenshots instead.', 422, 'video_only');
+}
+
+const SKIP_HOSTS = /(^|\.)(tiktok\.com|instagram\.com|facebook\.com|youtube\.com|youtu\.be|linktr\.ee|beacons\.ai|stan\.store|amzn\.to|amazon\.com|ltk\.app|liketk\.it)$/i;
+function urlsIn(t) {
+  return (t.match(/\b(?:https?:\/\/|www\.)[^\s<>"')\]]+/gi) || []).map(u => u.replace(/[.,;:!?]+$/, ''));
+}
+function normalizeUrl(u) {
+  u = String(u || '').trim(); if (!u) return '';
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u.replace(/^\/+/, '');
+  try { const x = new URL(u); return /\./.test(x.hostname) ? x.href : ''; } catch { return ''; }
+}
+function withNote(recipe, note) { return { ...recipe, notes: [recipe.notes, note].filter(Boolean).join('\n\n') }; }
 
 // TikTok captions: try the public oEmbed, then the video page, then TikTok's embed page
 // (short links like vm.tiktok.com / tiktok.com/t/... redirect to the full page). Many creators put the whole recipe there.
@@ -207,7 +261,8 @@ async function fromLink(link) {
     return { origin: 'TikTok' + (got.author ? ` (@${got.author})` : ''),
       text: `TikTok video by ${got.author || 'unknown'}. Caption:\n${got.caption}` };
   }
-  const r = await fetch(link, { headers: { 'User-Agent': 'Mozilla/5.0 (DailyRuffage importer)', Accept: 'text/html' } });
+  const r = await fetch(link, { headers: { 'User-Agent': DESKTOP_UA, Accept: 'text/html', 'Accept-Language': 'en-US,en;q=0.9' },
+    redirect: 'follow', signal: AbortSignal.timeout(15_000) });
   if (!r.ok) throw fail(`That site returned ${r.status}`);
   const html = await r.text();
   const ld = findJsonLdRecipe(html);
@@ -297,19 +352,23 @@ Rules:
 - Ignore ads, comments, like counts, navigation and life-story text.
 - For dictation or vague amounts, write the best reading and add a short note listing anything you guessed.
 - Keep the author's wording for steps where reasonable; one action or short group of actions per step.
-- If the material clearly isn't a recipe, return {"title": "", "notes": "No recipe found: <why>"}.
+- Also judge what you were given, in "status":
+  "complete" = ingredients AND steps are both there (amounts may be rough);
+  "partial"  = some of the recipe is there but ingredients or steps are clearly missing;
+  "pointer"  = the material says the recipe is somewhere else (a website, "link in bio", comments, the video);
+  "none"     = no recipe at all (explain briefly in "notes").
+- "recipeUrl": if the material gives a web address for the full recipe, put it here; otherwise "".
 
 Return ONLY JSON, no prose, in this shape:
-{"title": "", "description": "", "servings": "", "prepTime": "", "cookTime": "",
+{"status": "complete", "recipeUrl": "", "title": "", "description": "", "servings": "", "prepTime": "", "cookTime": "",
  "ingredients": [{"amount": "2", "unit": "cups", "item": "flour, sifted"}, {"section": "Sauce"}, ...],
  "steps": [{"text": "Preheat oven to 350°F."}, {"text": "Whisk the sauce.", "section": "Sauce"}],
  "notes": "", "tags": ["lowercase", "few"], "source": "creator or site name if shown"}
 "section" entries in ingredients are group headings; omit them if the recipe has none.`;
 
-async function aiParse(env, text, images) {
+async function aiParse(env, text, images, deadline = Date.now() + AI_TIMEOUT_MS) {
   const provider = (env.AI_PROVIDER || 'gemini').toLowerCase();
   const material = text ? `\n\nMaterial (text):\n${text}` : '';
-  const deadline = Date.now() + AI_TIMEOUT_MS;   // one time budget for all tries combined
   let raw;
   if (provider === 'anthropic') raw = await callClaude(env, PROMPT + material, images, deadline, env.AI_MODEL);
   else {
@@ -324,15 +383,20 @@ async function aiParse(env, text, images) {
   const m = raw.match(/\{[\s\S]*\}/);
   if (!m) throw fail('The AI did not return a recipe. Try again or use screenshots.', 502);
   let r; try { r = JSON.parse(m[0]); } catch { throw fail('The AI returned something unreadable. Try again.', 502); }
-  if (!r.title && r.notes) throw fail(r.notes, 422);
-  return {
+  const recipe = {
     title: String(r.title || ''), description: String(r.description || ''), servings: String(r.servings || ''),
     prepTime: String(r.prepTime || ''), cookTime: String(r.cookTime || ''),
     ingredients: (r.ingredients || []).map(i => i.section ? { section: String(i.section) }
-      : { amount: String(i.amount || ''), unit: String(i.unit || ''), item: String(i.item || '') }),
+      : { amount: String(i.amount || ''), unit: String(i.unit || ''), item: String(i.item || '') }).filter(i => i.section || i.item),
     steps: (r.steps || []).map(s => typeof s === 'string' ? { text: s } : (s.section ? { text: String(s.text), section: String(s.section) } : { text: String(s.text || '') })).filter(s => s.text),
     notes: String(r.notes || ''), tags: (r.tags || []).map(t => String(t).toLowerCase()).slice(0, 6), source: String(r.source || ''),
   };
+  // trust the AI's verdict, but check it against what actually came back
+  const hasIng = recipe.ingredients.some(i => i.item), hasSteps = recipe.steps.length > 0;
+  let status = ['complete', 'partial', 'pointer', 'none'].includes(r.status) ? r.status : (hasIng || hasSteps ? 'complete' : 'none');
+  if (status === 'complete' && !(hasIng && hasSteps)) status = hasIng || hasSteps ? 'partial' : 'none';
+  if ((status === 'partial' || status === 'pointer') && !hasIng && !hasSteps) status = status === 'pointer' ? 'pointer' : 'none';
+  return { recipe, status, recipeUrl: String(r.recipeUrl || '') };
 }
 
 async function callGemini(env, prompt, images, deadline) {
