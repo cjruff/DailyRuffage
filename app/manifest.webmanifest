@@ -1,6 +1,6 @@
 {
-  "name": "Ruff Cookbook",
-  "short_name": "Cookbook",
+  "name": "Daily Ruffage",
+  "short_name": "Ruffage",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

@@ -1,4 +1,4 @@
-// Ruff Cookbook — main app (views + routing).
+// Daily Ruffage — main app (views + routing).
 // Code: © Corey J Ruff
 
 import { db, blankRecipe } from './db.js';
@@ -123,7 +123,7 @@ function hl(text) {
 }
 
 function renderList() {
-  setTop('Ruff Cookbook', false); showFab(true);
+  setTop('Daily Ruffage', false); showFab(true);
   const tags = [...new Set(recipes.flatMap(r => r.tags || []))].sort();
   const reviewCount = recipes.filter(r => r.needsReview).length;
   const chips = [['all', 'All'], ['fav', '★ Favorites'], ['recent', 'Recent'],
@@ -363,7 +363,7 @@ async function renderSettings() {
   </div>
   <div class="panel form">
     <h3>Server (sync + photo import)</h3>
-    <label>Worker URL</label><input type="url" id="url" value="${h(s.serverUrl || '')}" placeholder="https://ruff-cookbook.yourname.workers.dev">
+    <label>Worker URL</label><input type="url" id="url" value="${h(s.serverUrl || '')}" placeholder="https://daily-ruffage.yourname.workers.dev">
     <label>Passcode</label><input type="password" id="pass" value="${h(s.passcode || '')}">
     <div class="hint">${last ? 'Last synced ' + new Date(last).toLocaleString() : 'Not synced yet'}${pending ? ` · ${pending} change(s) waiting` : ''}</div>
     <div class="actions"><button class="btn primary" id="save">Save</button><button class="btn" id="syncNow" ${hasServer() ? '' : 'disabled'}>Sync now</button></div>
@@ -374,7 +374,7 @@ async function renderSettings() {
     <div class="actions"><button class="btn" id="export">Download backup</button>
       <label class="btn">Restore from file<input type="file" id="restore" accept="application/json,.json" hidden></label></div>
   </div>
-  <footer class="about">Ruff Cookbook · ${recipes.length} recipes<br>Code: © Corey J Ruff</footer>`;
+  <footer class="about">Daily Ruffage · ${recipes.length} recipes<br>Code: © Corey J Ruff</footer>`;
   $('#name').onchange = e => saveSettings({ name: e.target.value.trim() });
   $('#save').onclick = () => {
     saveSettings({ name: $('#name').value.trim(), serverUrl: $('#url').value.trim(), passcode: $('#pass').value });
@@ -384,8 +384,8 @@ async function renderSettings() {
   $('#export').onclick = async () => {
     const all = (await db.all()).map(({ _dirty, ...r }) => r);
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([JSON.stringify({ app: 'ruff-cookbook', exportedAt: new Date().toISOString(), recipes: all }, null, 1)], { type: 'application/json' }));
-    a.download = `ruff-cookbook-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.href = URL.createObjectURL(new Blob([JSON.stringify({ app: 'daily-ruffage', exportedAt: new Date().toISOString(), recipes: all }, null, 1)], { type: 'application/json' }));
+    a.download = `daily-ruffage-backup-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
   };
   $('#restore').onchange = async e => {

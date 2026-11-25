@@ -4,7 +4,7 @@
 
 import { db } from './db.js';
 
-const KEY = 'ruff-cookbook-settings';
+const KEY = 'daily-ruffage-settings';
 export function settings() {
   try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; }
 }

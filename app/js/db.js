@@ -1,7 +1,7 @@
 // Local storage: IndexedDB holds the full cookbook so search is instant and works offline.
 // Code: © Corey J Ruff
 
-const DB_NAME = 'ruff-cookbook';
+const DB_NAME = 'daily-ruffage';
 const DB_VERSION = 1;
 let dbp = null;
 
