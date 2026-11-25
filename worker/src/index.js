@@ -131,39 +131,66 @@ async function importRecipe(req, env) {
   return { recipe: full, saved: save };
 }
 
-// TikTok captions: try the public oEmbed first, then the video page itself (short links like
-// vm.tiktok.com / tiktok.com/t/... redirect to the full page). Many recipe creators put the whole recipe there.
-const BROWSER_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+// TikTok captions: try the public oEmbed, then the video page, then TikTok's embed page
+// (short links like vm.tiktok.com / tiktok.com/t/... redirect to the full page). Many creators put the whole recipe there.
+const PHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 async function tiktokCaption(link) {
-  const headers = { 'User-Agent': BROWSER_UA, 'Accept-Language': 'en-US,en;q=0.9' };
+  let author = (link.match(/@([\w.]+)/) || [])[1] || '';
+  let id = (link.match(/\/video\/(\d+)/) || [])[1] || '';
   try {
-    const r = await fetch('https://www.tiktok.com/oembed?url=' + encodeURIComponent(link), { headers });
-    const body = await r.text();
-    let j = {}; try { j = JSON.parse(body); } catch {}
-    console.log('tiktok oembed', r.status, body.slice(0, 300));
-    if (j.title) return { caption: j.title, author: j.author_unique_id || j.author_name || '' };
+    const r = await fetch('https://www.tiktok.com/oembed?url=' + encodeURIComponent(link), { headers: { 'User-Agent': DESKTOP_UA } });
+    const j = await r.json().catch(() => ({}));
+    author = j.author_unique_id || author;
+    if (!id) id = (String(j.html || '').match(/\/(\d{15,})/) || [])[1] || '';
+    console.log('tiktok oembed', r.status, 'title:', JSON.stringify(String(j.title || '').slice(0, 80)));
+    if (j.title) return { caption: j.title, author };
   } catch (e) { console.error('tiktok oembed failed', e); }
-  try {
-    const r = await fetch(link, { headers: { ...headers, Accept: 'text/html' }, redirect: 'follow' });
-    const html = await r.text();
-    console.log('tiktok page', r.status, r.url, html.length);
-    // the page embeds its data as JSON
-    const m = html.match(/<script[^>]+id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/);
-    if (m) {
-      try {
-        const item = JSON.parse(m[1])?.__DEFAULT_SCOPE__?.['webapp.video-detail']?.itemInfo?.itemStruct;
-        if (item?.desc) return { caption: item.desc, author: item.author?.uniqueId || '' };
-      } catch {}
-    }
-    // fall back to the page's description tags
-    const meta = html.match(/<meta[^>]+(?:property="og:description"|name="description")[^>]+content="([^"]*)"/i);
-    if (meta) {
-      const caption = decodeEntities(meta[1]).trim();
-      const author = (r.url.match(/@([\w.]+)/) || [])[1] || '';
-      if (caption && !/^TikTok - Make Your Day/i.test(caption)) return { caption, author };
-    }
-  } catch (e) { console.error('tiktok page failed', e); }
-  return { caption: '', author: '' };
+
+  const pages = [[link, DESKTOP_UA], [link, PHONE_UA]];
+  if (id) pages.splice(1, 0, [`https://www.tiktok.com/embed/v2/${id}`, DESKTOP_UA]);
+  for (const [url, ua] of pages) {
+    try {
+      const r = await fetch(url, { headers: { 'User-Agent': ua, Accept: 'text/html', 'Accept-Language': 'en-US,en;q=0.9' }, redirect: 'follow' });
+      const html = await r.text();
+      if (!id) id = (r.url.match(/\/video\/(\d+)/) || [])[1] || '';
+      if (!author) author = (r.url.match(/@([\w.]+)/) || [])[1] || '';
+      const found = captionFromHtml(html);
+      console.log('tiktok page', r.status, url.includes('/embed/') ? 'embed' : (ua === PHONE_UA ? 'phone' : 'desktop'),
+        html.length, 'via:', found.via || 'nothing', JSON.stringify(found.caption.slice(0, 80)),
+        '| title tag:', JSON.stringify((html.match(/<title[^>]*>([^<]*)/i) || [])[1] || ''));
+      if (found.caption) return { caption: found.caption, author: found.author || author };
+    } catch (e) { console.error('tiktok page failed', url, e); }
+  }
+  return { caption: '', author };
+}
+
+function captionFromHtml(html) {
+  // 1) the data blob TikTok embeds in its pages
+  for (const sid of ['__UNIVERSAL_DATA_FOR_REHYDRATION__', 'SIGI_STATE', '__FRONTITY_CONNECT_STATE__', '__NEXT_DATA__']) {
+    const m = html.match(new RegExp(`<script[^>]*id=["']${sid}["'][^>]*>([\\s\\S]*?)<\\/script>`));
+    if (!m) continue;
+    try {
+      const data = JSON.parse(m[1]);
+      const item = data?.__DEFAULT_SCOPE__?.['webapp.video-detail']?.itemInfo?.itemStruct;
+      if (item?.desc) return { caption: item.desc, author: item.author?.uniqueId || '', via: sid };
+      const mod = data?.ItemModule && Object.values(data.ItemModule)[0];
+      if (mod?.desc) return { caption: mod.desc, author: mod.author || '', via: sid };
+    } catch {}
+  }
+  // 2) any "desc" string anywhere in the page's JSON; the longest one is the caption
+  let best = '';
+  for (const m of html.matchAll(/"desc"\s*:\s*"((?:\\.|[^"\\])*)"/g)) {
+    try { const t = JSON.parse('"' + m[1] + '"'); if (t.length > best.length) best = t; } catch {}
+  }
+  if (best.length > 20) return { caption: best, via: 'desc' };
+  // 3) description meta tags, in either attribute order
+  for (const tag of html.match(/<meta\b[^>]*>/gi) || []) {
+    if (!/(?:property|name)=["'](?:og:description|description|twitter:description)["']/i.test(tag)) continue;
+    const c = decodeEntities((tag.match(/content=["']([^"']*)["']/i) || [])[1] || '').trim();
+    if (c.length > 20 && !/^TikTok - Make Your Day/i.test(c) && !/^(?:Watch|Discover).*on TikTok/i.test(c)) return { caption: c, via: 'meta' };
+  }
+  return { caption: '' };
 }
 function decodeEntities(t) {
   return t.replace(/&quot;/g, '"').replace(/&#39;|&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
