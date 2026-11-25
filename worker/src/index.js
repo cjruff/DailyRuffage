@@ -131,16 +131,54 @@ async function importRecipe(req, env) {
   return { recipe: full, saved: save };
 }
 
+// TikTok captions: try the public oEmbed first, then the video page itself (short links like
+// vm.tiktok.com / tiktok.com/t/... redirect to the full page). Many recipe creators put the whole recipe there.
+const BROWSER_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+async function tiktokCaption(link) {
+  const headers = { 'User-Agent': BROWSER_UA, 'Accept-Language': 'en-US,en;q=0.9' };
+  try {
+    const r = await fetch('https://www.tiktok.com/oembed?url=' + encodeURIComponent(link), { headers });
+    const body = await r.text();
+    let j = {}; try { j = JSON.parse(body); } catch {}
+    console.log('tiktok oembed', r.status, body.slice(0, 300));
+    if (j.title) return { caption: j.title, author: j.author_unique_id || j.author_name || '' };
+  } catch (e) { console.error('tiktok oembed failed', e); }
+  try {
+    const r = await fetch(link, { headers: { ...headers, Accept: 'text/html' }, redirect: 'follow' });
+    const html = await r.text();
+    console.log('tiktok page', r.status, r.url, html.length);
+    // the page embeds its data as JSON
+    const m = html.match(/<script[^>]+id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/);
+    if (m) {
+      try {
+        const item = JSON.parse(m[1])?.__DEFAULT_SCOPE__?.['webapp.video-detail']?.itemInfo?.itemStruct;
+        if (item?.desc) return { caption: item.desc, author: item.author?.uniqueId || '' };
+      } catch {}
+    }
+    // fall back to the page's description tags
+    const meta = html.match(/<meta[^>]+(?:property="og:description"|name="description")[^>]+content="([^"]*)"/i);
+    if (meta) {
+      const caption = decodeEntities(meta[1]).trim();
+      const author = (r.url.match(/@([\w.]+)/) || [])[1] || '';
+      if (caption && !/^TikTok - Make Your Day/i.test(caption)) return { caption, author };
+    }
+  } catch (e) { console.error('tiktok page failed', e); }
+  return { caption: '', author: '' };
+}
+function decodeEntities(t) {
+  return t.replace(/&quot;/g, '"').replace(/&#39;|&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n)).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)));
+}
+
 async function fromLink(link) {
   let u; try { u = new URL(link); } catch { throw fail('That doesn’t look like a link'); }
   const host = u.hostname.replace(/^www\./, '');
   if (host.endsWith('tiktok.com')) {
-    // TikTok's public oEmbed returns the caption — many recipe creators put the full recipe there.
-    const r = await fetch('https://www.tiktok.com/oembed?url=' + encodeURIComponent(link));
-    if (!r.ok) throw fail('TikTok didn’t return that video (is it private?)');
-    const j = await r.json();
-    return { origin: 'TikTok' + (j.author_name ? ` (@${j.author_name})` : ''),
-      text: `TikTok video by ${j.author_name || 'unknown'}. Caption:\n${j.title || ''}` };
+    const got = await tiktokCaption(link);
+    if (!got.caption) throw fail('Couldn’t read that TikTok’s caption (TikTok may be blocking it, or the caption is empty). '
+      + 'Try 📸 screenshots of the ingredients, or 🎙️ dictate it.', 422);
+    return { origin: 'TikTok' + (got.author ? ` (@${got.author})` : ''),
+      text: `TikTok video by ${got.author || 'unknown'}. Caption:\n${got.caption}` };
   }
   const r = await fetch(link, { headers: { 'User-Agent': 'Mozilla/5.0 (DailyRuffage importer)', Accept: 'text/html' } });
   if (!r.ok) throw fail(`That site returned ${r.status}`);
