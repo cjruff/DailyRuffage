@@ -345,7 +345,7 @@ function renderAdd() {
   $('#goPhotos').onclick = async () => {
     const fd = new FormData();
     for (const f of files) fd.append('images', await shrinkImage(f), f.name.replace(/\.\w+$/, '') + '.jpg');
-    run(fd, `Reading ${files.length} image${files.length > 1 ? 's' : ''}… (10–30 seconds)`);
+    run(fd, `Reading ${files.length} image${files.length > 1 ? 's' : ''}… (usually under a minute)`);
   };
   $('#goUrl').onclick = () => { const u = $('#url').value.trim(); if (!u) return; const fd = new FormData(); fd.append('url', u); run(fd, 'Fetching…'); };
   $('#goTxt').onclick = () => { const t = $('#txt').value.trim(); if (!t) return; const fd = new FormData(); fd.append('text', t); run(fd, 'Writing it up…'); };

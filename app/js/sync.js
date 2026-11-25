@@ -19,7 +19,12 @@ export async function api(path, opts = {}) {
   });
   if (!res.ok) {
     let msg = res.status + ' ' + res.statusText;
-    try { const j = await res.json(); if (j.error) msg = j.error; } catch {}
+    const body = await res.text().catch(() => '');
+    try { const j = JSON.parse(body); if (j.error) msg = j.error; }
+    catch {                                     // Cloudflare's own error pages are plain text, not JSON
+      if (res.status === 524) msg = 'The server took too long (over 100 s). Try again, or fewer screenshots at a time.';
+      else if (/error code/i.test(body)) msg = 'Server error ' + res.status + '. Try again in a minute.';
+    }
     throw new Error(msg);
   }
   return res;

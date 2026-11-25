@@ -4,6 +4,9 @@
 // Code: © Corey J Ruff
 
 const MAX_IMAGES = 10;
+// Cloudflare cuts a request off (error 524) if the Worker sends nothing for 100 s,
+// so give the AI a little less than that and return a readable error instead.
+const AI_TIMEOUT_MS = 85_000;
 
 export default {
   async fetch(req, env) {
@@ -76,6 +79,12 @@ async function saveImage(env, file) {
   return { key, buf, mime: file.type || 'image/jpeg' };
 }
 
+async function dropImages(env, saved) {
+  if (!saved.length) return;
+  const stmt = env.DB.prepare('DELETE FROM images WHERE key = ?1');
+  try { await env.DB.batch(saved.map(s => stmt.bind(s.key))); } catch (e) { console.error(e); }
+}
+
 async function getImage(env, key, cors) {
   const row = await env.DB.prepare('SELECT mime, data FROM images WHERE key = ?1').bind(key).first();
   if (!row) return json({ error: 'Image not found' }, 404, cors);
@@ -107,7 +116,8 @@ async function importRecipe(req, env) {
   }
   if (!recipe) {
     if (!context && !saved.length) throw fail('Could not find any recipe text at that link. Try screenshots instead.');
-    recipe = await aiParse(env, context, saved);
+    try { recipe = await aiParse(env, context, saved); }
+    catch (e) { await dropImages(env, saved); throw e; }      // don't leave orphan photos behind
     origin = origin || (saved.length ? 'Screenshots' : 'Typed / dictated');
   }
   const now = new Date().toISOString();
@@ -200,6 +210,14 @@ function parseIngredient(line) {
 }
 
 /* ---------- AI ---------- */
+async function aiFetch(url, opts) {
+  try { return await fetch(url, { ...opts, signal: AbortSignal.timeout(AI_TIMEOUT_MS) }); }
+  catch (e) {
+    if (e.name === 'TimeoutError' || e.name === 'AbortError')
+      throw fail('The AI took too long to read this. Try again, or send fewer screenshots at a time.', 504);
+    throw e;
+  }
+}
 const PROMPT = `You turn recipe material into a structured recipe. The material may be screenshots (in order, possibly
 overlapping or cut off between images), a social-media caption, web page text, or someone's rambling dictation.
 
@@ -240,20 +258,28 @@ async function callGemini(env, prompt, images) {
   if (!env.GEMINI_API_KEY) throw fail('GEMINI_API_KEY is not set on the Worker', 500);
   const model = env.AI_MODEL || 'gemini-2.5-flash';
   const parts = [...images.map(i => ({ inline_data: { mime_type: i.mime, data: toBase64(i.buf) } })), { text: prompt }];
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+  // Reading a recipe doesn't need long "thinking", which is what made big imports slow.
+  // 2.x models take a token budget; 3.x models take a level.
+  const thinkingConfig = /gemini-2\./.test(model) ? { thinkingBudget: 0 } : { thinkingLevel: 'low' };
+  const call = (gen) => aiFetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-    body: JSON.stringify({ contents: [{ parts }], generationConfig: { responseMimeType: 'application/json', temperature: 0.1 } }),
+    body: JSON.stringify({ contents: [{ parts }], generationConfig: gen }),
   });
-  const j = await r.json();
+  const base = { responseMimeType: 'application/json', temperature: 0.1 };
+  let r = await call({ ...base, thinkingConfig });
+  let j = await r.json().catch(() => ({}));
+  if (r.status === 400 && /think/i.test(j.error?.message || '')) {   // model doesn't accept that setting: run without it
+    r = await call(base); j = await r.json().catch(() => ({}));
+  }
   if (!r.ok) throw fail('Gemini error: ' + (j.error?.message || r.status), 502);
-  return j.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+  return j.candidates?.[0]?.content?.parts?.filter(p => !p.thought).map(p => p.text || '').join('') || '';
 }
 
 async function callClaude(env, prompt, images) {
   if (!env.ANTHROPIC_API_KEY) throw fail('ANTHROPIC_API_KEY is not set on the Worker', 500);
   const content = [...images.map(i => ({ type: 'image', source: { type: 'base64', media_type: i.mime, data: toBase64(i.buf) } })),
     { type: 'text', text: prompt }];
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
+  const r = await aiFetch('https://api.anthropic.com/v1/messages', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({ model: env.AI_MODEL || 'claude-haiku-5-5', max_tokens: 4096, messages: [{ role: 'user', content }] }),
   });
