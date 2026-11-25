@@ -19,6 +19,8 @@ a { color: var(--accent); }
 #topbar h1 { flex: 1; margin: 0; font-size: 1.15rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .icon-btn { background: none; border: 0; font-size: 1.5rem; line-height: 1; padding: 4px 10px; cursor: pointer; color: var(--ink); }
 #back { font-size: 2rem; padding: 0 10px 4px; }
+#brand { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; border: 1px solid var(--line); }
+.brand-big { display: block; width: 180px; height: 180px; border-radius: 16px; object-fit: cover; margin: 0 auto 10px; box-shadow: 0 4px 14px rgba(0,0,0,.2); }
 #sync-dot { width: 9px; height: 9px; border-radius: 50%; background: transparent; }
 #sync-dot.ok { background: var(--good); } #sync-dot.pending { background: var(--warn); } #sync-dot.err { background: #c0392b; }
 
