@@ -1,0 +1,21 @@
+name = "ruff-cookbook"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ruff-cookbook"
+database_id = "PASTE-ID-FROM-wrangler-d1-create"
+
+[vars]
+# "gemini" (free tier) or "anthropic" (paid, fractions of a cent per recipe)
+AI_PROVIDER = "gemini"
+# Leave blank for the default model of the chosen provider
+AI_MODEL = ""
+# Your GitHub Pages origin, e.g. "https://cjruff.github.io" ("*" works but is looser)
+ALLOWED_ORIGIN = "https://cjruff.github.io"
+
+# Secrets (set with `npx wrangler secret put NAME`, never put them in this file):
+#   PASSCODE          – what you both type into the app's Settings
+#   GEMINI_API_KEY    – from aistudio.google.com (if AI_PROVIDER = gemini)
+#   ANTHROPIC_API_KEY – from console.anthropic.com (if AI_PROVIDER = anthropic)
