@@ -1,4 +1,4 @@
-// Ruff Cookbook — Cloudflare Worker backend.
+// Daily Ruffage — Cloudflare Worker backend.
 // Sync (D1), source photos (stored in D1 too, so no R2 / card needed), and recipe import
 // from screenshots, links (TikTok captions, recipe websites) and free-form text.
 // Code: © Corey J Ruff
@@ -11,7 +11,7 @@ export default {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
     const url = new URL(req.url);
     try {
-      if (url.pathname === '/' ) return json({ ok: true, app: 'ruff-cookbook' }, 200, cors);
+      if (url.pathname === '/' ) return json({ ok: true, app: 'daily-ruffage' }, 200, cors);
       if (!url.pathname.startsWith('/api/')) return json({ error: 'Not found' }, 404, cors);
       if (!env.PASSCODE || req.headers.get('X-Passcode') !== env.PASSCODE) return json({ error: 'Wrong passcode' }, 401, cors);
 
@@ -113,7 +113,7 @@ async function importRecipe(req, env) {
   const now = new Date().toISOString();
   const full = {
     id: uuid(), title: '', description: '', servings: '', prepTime: '', cookTime: '', ingredients: [], steps: [],
-    notes: '', tags: [], favorite: false, rating: 0, source: '', sourceUrl: '', origin: '', images: [], addedBy: '',
+    notes: '', tags: [], favorite: false, rating: 0, source: '',
     ...recipe, sourceUrl: sourceUrl || recipe.sourceUrl || '', origin, images: saved.map(s => s.key), addedBy,
     needsReview: true, createdAt: now, updatedAt: now, deleted: false,
   };
@@ -132,7 +132,7 @@ async function fromLink(link) {
     return { origin: 'TikTok' + (j.author_name ? ` (@${j.author_name})` : ''),
       text: `TikTok video by ${j.author_name || 'unknown'}. Caption:\n${j.title || ''}` };
   }
-  const r = await fetch(link, { headers: { 'User-Agent': 'Mozilla/5.0 (RuffCookbook importer)', Accept: 'text/html' } });
+  const r = await fetch(link, { headers: { 'User-Agent': 'Mozilla/5.0 (DailyRuffage importer)', Accept: 'text/html' } });
   if (!r.ok) throw fail(`That site returned ${r.status}`);
   const html = await r.text();
   const ld = findJsonLdRecipe(html);
